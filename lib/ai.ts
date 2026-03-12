@@ -11,11 +11,9 @@
  *         JSON and call txt2img for a photorealistic top-down render.
  */
 
-import { GoogleGenAI } from "@google/genai";
-
-// Initialize Gemini
-// Note: In Vite, env variables are exposed on import.meta.env
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+// AI vision analysis is handled server-side via Groq (see visualizer.$id.tsx action).
+// This file contains shared types, the analysis prompt, and the client-side
+// image resize helper used before sending to the server.
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -189,49 +187,15 @@ export const analyzeFloorPlan = async (
       "Image resize"
     );
 
-    // The base64Image comes as `data:image/jpeg;base64,...`
-    // We need to strip the prefix for Gemini
-    const base64Data = small.split(",")[1];
-    if (!base64Data) throw new Error("Failed to extract base64 data from image");
+    // NOTE: Floor plan analysis is now handled server-side via Groq.
+    // This client-side path is kept as a stub — real work happens in the
+    // React Router action() in visualizer.$id.tsx which calls Groq securely.
+    throw new Error("Use the server-side action() for floor plan analysis via Groq.");
 
-    const geminiCall = ai.models.generateContent({
-      model: "gemini-2.0-flash-lite",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: ANALYSIS_PROMPT },
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: "image/jpeg",
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    // 45-second hard timeout — prevents infinite spinner if the API hangs
-    const response = await withTimeout(geminiCall, 45_000, "Gemini generateContent");
-
-    const raw = response.text;
-    if (!raw) throw new Error("Gemini returned an empty response (possible safety block or quota issue)");
-
-    // Strip any accidentally-included markdown fences
-    const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-
-    // Find JSON boundaries
-    const jsonStart = cleaned.indexOf("{");
-    const jsonEnd = cleaned.lastIndexOf("}");
-    if (jsonStart === -1 || jsonEnd === -1) {
-      throw new Error("No JSON object found in Gemini response");
-    }
-
-    const data = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1)) as FloorPlanData;
-
+    // Unreachable — satisfies TypeScript return type below
+    const data = {} as FloorPlanData;
     if (!Array.isArray(data.rooms) || data.rooms.length === 0) {
-      throw new Error("Gemini returned no rooms — floor plan may be unreadable");
+      throw new Error("No rooms found");
     }
 
     // Ensure every room has an id and sanitize doors/windows

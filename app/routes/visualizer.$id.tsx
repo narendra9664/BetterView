@@ -39,21 +39,21 @@ export function meta() {
 }
 
 // ─── SERVER ACTION ─────────────────────────────────────────────────────────────
-// Uses Gemini API directly — reliable, server-side, no CORS issues.
-// Model: gemini-2.0-flash (vision capable, fast)
+// Uses Groq API (OpenAI-compatible) — fast, reliable, server-side only.
+// Model: llama-3.2-11b-vision-preview (native vision support on Groq)
 
 export async function action({ request }: ActionFunctionArgs) {
-  const formData  = await request.formData();
+  const formData = await request.formData();
   const imageData = formData.get("imageData") as string | null;
 
   if (!imageData) {
     return Response.json({ error: "No image data provided" }, { status: 400 });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return Response.json(
-      { error: "GEMINI_API_KEY not set in .env file." },
+      { error: "GROQ_API_KEY not set in .env file." },
       { status: 500 }
     );
   }
@@ -61,59 +61,70 @@ export async function action({ request }: ActionFunctionArgs) {
   try {
     const { ANALYSIS_PROMPT } = await import("../../lib/ai");
 
-    // Detect mime type and extract base64 data
+    // Rebuild a clean data URI so Groq receives a properly-prefixed base64 URL
     const mimeType: string =
       imageData.startsWith("data:image/png")  ? "image/png"  :
       imageData.startsWith("data:image/webp") ? "image/webp" :
       "image/jpeg";
-    const base64Data = imageData.includes(",") ? imageData.split(",")[1] : imageData;
+    const base64Data   = imageData.includes(",") ? imageData.split(",")[1] : imageData;
+    const imageDataUrl = `data:${mimeType};base64,${base64Data}`;
 
-    console.log("[BetterView] Calling Gemini API for floor plan analysis...");
+    console.log("[BetterView] Calling Groq Vision API (llama-3.2-11b-vision-preview)...");
 
-    // Call Gemini REST API directly (works in Node.js server-side)
+    // ── Groq fetch ─────────────────────────────────────────────────────────────
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const timeout    = setTimeout(() => controller.abort(), 60_000);
 
     let raw: string;
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          signal: controller.signal,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: ANALYSIS_PROMPT },
-                { inline_data: { mime_type: mimeType, data: base64Data } },
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method:  "POST",
+        signal:  controller.signal,
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type":  "application/json",
+        },
+        body: JSON.stringify({
+          model:       "llama-3.2-11b-vision-preview",
+          temperature: 0.1,
+          max_tokens:  4096,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text",      text: ANALYSIS_PROMPT },
+                { type: "image_url", image_url: { url: imageDataUrl } },
               ],
-            }],
-            generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
-          }),
-        }
-      );
+            },
+          ],
+        }),
+      });
+
+      // Log the full HTTP status so errors are immediately visible in server logs
+      console.log(`[BetterView] Groq response status: ${res.status} ${res.statusText}`);
 
       const json = await res.json() as any;
 
       if (!res.ok || json.error) {
-        const msg = json.error?.message || json.error || `HTTP ${res.status}`;
-        throw new Error(`Gemini API error: ${msg}`);
+        // Surface the complete error object for easy debugging
+        console.error("[BetterView] Groq error response:", JSON.stringify(json, null, 2));
+        const msg = json.error?.message || json.error || `HTTP ${res.status} ${res.statusText}`;
+        throw new Error(`Groq API error (${res.status}): ${msg}`);
       }
 
-      raw = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-      if (!raw) throw new Error("Gemini returned an empty response");
+      raw = json.choices?.[0]?.message?.content ?? "";
+      if (!raw) throw new Error("Groq returned an empty response — possible safety filter or quota issue");
 
     } finally {
       clearTimeout(timeout);
     }
 
-    // ── Parse the JSON response ─────────────────────────────────────────────
+    // ── Parse JSON from the model response ───────────────────────────────────────
     const cleaned   = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
     const jsonStart = cleaned.indexOf("{");
     const jsonEnd   = cleaned.lastIndexOf("}");
     if (jsonStart === -1 || jsonEnd === -1) {
-      throw new Error("No JSON found in Gemini response");
+      throw new Error("No JSON object found in Groq response");
     }
 
     const floorPlanData = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1)) as FloorPlanData;
@@ -121,7 +132,7 @@ export async function action({ request }: ActionFunctionArgs) {
       throw new Error("AI found no rooms — try a clearer floor plan image");
     }
 
-    // Sanitise room data
+    // Sanitise each room so downstream 3D code never crashes on missing fields
     floorPlanData.rooms = floorPlanData.rooms.map((r: any, i: number) => ({
       ...r,
       id:      r.id ?? `r${i + 1}`,
@@ -129,12 +140,13 @@ export async function action({ request }: ActionFunctionArgs) {
       windows: Array.isArray(r.windows) ? r.windows : [],
     }));
 
-    console.log(`[BetterView] Gemini success — found ${floorPlanData.rooms.length} rooms`);
-    return Response.json({ floorPlanData, source: "gemini-2.0-flash" });
+    console.log(`[BetterView] Groq success — found ${floorPlanData.rooms.length} rooms`);
+    return Response.json({ floorPlanData, source: "llama-3.2-11b-vision-preview" });
 
   } catch (err) {
+    // Log the full error object (not just .message) so HTTP codes are visible
+    console.error("[BetterView] Groq analysis failed — full error:", err);
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[BetterView] Gemini analysis failed:", msg);
     return Response.json({ error: msg, source: "error" }, { status: 500 });
   }
 }
@@ -142,7 +154,7 @@ export async function action({ request }: ActionFunctionArgs) {
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 
 export default function Visualizer() {
-  const { id }   = useParams<{ id: string }>();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toasts, addToast, dismiss } = useToast();
   const { isSignedIn, signIn } = useOutletContext<AuthOutletContext>();
@@ -150,12 +162,12 @@ export default function Visualizer() {
   // useFetcher calls our action() on the server
   const fetcher = useFetcher<{ floorPlanData?: FloorPlanData; error?: string; source?: string }>();
 
-  const [project, setProject]         = useState<DesignItem | null>(null);
-  const [loading, setLoading]         = useState(true);
-  const [genStatus, setGenStatus]     = useState<GenerationStatus>("idle");
+  const [project, setProject] = useState<DesignItem | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [genStatus, setGenStatus] = useState<GenerationStatus>("idle");
   const [showPaywall, setShowPaywall] = useState(false);
-  const [isPremium, setIsPremium]     = useState(false);
-  const [copied, setCopied]           = useState(false);
+  const [isPremium, setIsPremium] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [geminiError, setGeminiError] = useState<string | null>(null);
 
   // ── Load project on mount ───────────────────────────────────────────────────
@@ -184,7 +196,7 @@ export default function Visualizer() {
         setGenStatus("done");
         addToast(
           fromGemini
-            ? "✓ 3D model built from YOUR floor plan via Gemini!"
+            ? "✓ 3D model built from YOUR floor plan via AI Vision!"
             : "✓ 3D model ready (fallback — see banner for error details)",
           "success"
         );
@@ -204,7 +216,7 @@ export default function Visualizer() {
       addToast(`AI error: ${result.error}. Showing fallback layout.`, "info");
       persistAndShow(createFallbackFloorPlan(), false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.state, fetcher.data]);
 
   // ── Trigger generation ─────────────────────────────────────────────────────
@@ -232,7 +244,7 @@ export default function Visualizer() {
 
   // ── Share & Upgrade ────────────────────────────────────────────────────────
   const handleShare = useCallback(() => {
-    navigator.clipboard.writeText(window.location.href).catch(() => {});
+    navigator.clipboard.writeText(window.location.href).catch(() => { });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
     addToast("Link copied!", "success");
@@ -318,7 +330,7 @@ export default function Visualizer() {
             </div>
             <div className="gen-status">
               <Loader2 size={24} className="animate-spin text-orange-500" />
-              <p className="gen-status__text">Analysing floor plan with Gemini Vision…</p>
+              <p className="gen-status__text">Analysing floor plan with Llama 3.2 11B Vision…</p>
               <p className="gen-status__hint">Running server-side · Reading rooms, walls &amp; doors</p>
               <div className="gen-steps">
                 <div className="gen-step gen-step--active">
@@ -366,7 +378,7 @@ export default function Visualizer() {
                 Generate 3D Render
               </button>
               <p className="visualizer__powered">
-                Powered by Gemini 2.0 Flash · Google AI · Vision Analysis
+                Powered by Llama 3.2 11B Vision · Groq · Vision Analysis
               </p>
             </div>
           </div>
@@ -380,7 +392,7 @@ export default function Visualizer() {
                 background: "#451a03", color: "#fed7aa", fontSize: "0.75rem",
                 padding: "0.5rem 1rem", display: "flex", gap: "0.5rem", alignItems: "center",
               }}>
-                ⚠️ Showing fallback layout — Gemini error: <em>{geminiError}</em>.
+                ⚠️ Showing fallback layout — AI error: <em>{geminiError}</em>.
                 Click ↺ Regenerate with a clearer floor plan image.
               </div>
             )}

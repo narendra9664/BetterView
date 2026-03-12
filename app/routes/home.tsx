@@ -18,7 +18,7 @@ export function meta({ }: Route.MetaArgs) {
 
 const FEATURES = [
     { icon: ScanLine, title: "Precise Geometry", description: "Walls, doors, and windows are perfectly preserved from your original sketch." },
-    { icon: Layers3, title: "AI-Powered", description: "Uses Gemini 2.5 Flash, one of the most capable vision AI models available." },
+    { icon: Layers3, title: "AI-Powered", description: "Uses Llama 3.2 11B Vision, one of the world's most capable open-source vision AI models via Hugging Face." },
     { icon: Box, title: "3D Mesh Export", description: "Pro users can download a .gltf or .obj 3D model for use in any 3D software." },
 ];
 
@@ -71,7 +71,7 @@ export default function Home() {
             <section className="hero">
                 <div className="announce">
                     <div className="dot"><div className="pulse" /></div>
-                    <p>Now powered by Gemini 2.5 Flash</p>
+                    <p>Now powered by Llama 3.2 11B (Hugging Face)</p>
                 </div>
 
                 <h1>Turn 2D blueprints into<br /> photorealistic 3D renders</h1>
