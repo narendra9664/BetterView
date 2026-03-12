@@ -1,105 +1,157 @@
 import type { Route } from "./+types/home";
-import Navbar from "../../components/Navbar"
-import {ArrowRight, Clock, Layers} from "lucide-react";
-import Button from "../../components/ui/Button";
-export function meta({}: Route.MetaArgs) {
-  return [
-    { title: "New React Router App" },
-    { name: "description", content: "Welcome to React Router!" },
-  ];
+import Navbar from "../../components/Navbar";
+import Dropzone from "../../components/Dropzone";
+import Toast, { useToast } from "../../components/ui/Toast";
+import { ArrowRight, ArrowUpRight, Clock, ScanLine, Layers3, Box } from "lucide-react";
+import { useNavigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { createProject, getProjects, type DesignItem } from "../../lib/db.action";
+import { useOutletContext } from "react-router";
+import type { AuthOutletContext } from "../../type.d";
+
+export function meta({ }: Route.MetaArgs) {
+    return [
+        { title: "BetterView — AI Architectural Visualization" },
+        { name: "description", content: "Convert 2D floor plans into photorealistic 3D renders in seconds. Free, powered by AI." },
+    ];
 }
 
-function ArrowUpRigh(props: { size: number }) {
-    return null;
-}
+const FEATURES = [
+    { icon: ScanLine, title: "Precise Geometry", description: "Walls, doors, and windows are perfectly preserved from your original sketch." },
+    { icon: Layers3, title: "AI-Powered", description: "Uses Gemini 2.5 Flash, one of the most capable vision AI models available." },
+    { icon: Box, title: "3D Mesh Export", description: "Pro users can download a .gltf or .obj 3D model for use in any 3D software." },
+];
 
 export default function Home() {
-  return (
-      <div className="home">
-        <Navbar />
-        <section className="hero">
-            <div className="announce">
-                <div className="dot">
-                    <div className="pulse"></div>
+    const navigate = useNavigate();
+    const { toasts, addToast, dismiss } = useToast();
+    const [projects, setProjects] = useState<DesignItem[]>([]);
+    const isCreatingRef = useRef(false);
+    const { isSignedIn, userName } = useOutletContext<AuthOutletContext>();
+
+    const handleUploadComplete = async (base64: string, projectId: string) => {
+        if (isCreatingRef.current) return;
+        isCreatingRef.current = true;
+        try {
+            const name = `Residence ${projectId}`;
+            const item: DesignItem = {
+                id: projectId,
+                name,
+                sourceUrl: "",       // Will be set after hosting
+                sourceImage: base64, // Base64 fallback
+                timestamp: Date.now(),
+            };
+
+            const saved = await createProject(item);
+            if (!saved) {
+                addToast("Failed to save your project. Please try again.", "error");
+                return;
+            }
+
+            setProjects(prev => [saved, ...prev]);
+            addToast("Floor plan uploaded! Redirecting to visualizer...", "success");
+            setTimeout(() => navigate(`/visualizer/${projectId}`), 800);
+        } catch {
+            addToast("An unexpected error occurred.", "error");
+        } finally {
+            isCreatingRef.current = false;
+        }
+    };
+
+    useEffect(() => {
+        getProjects().then(setProjects).catch(() => { });
+    }, [isSignedIn]);
+
+    return (
+        <div className="home">
+            <Navbar />
+            <Toast toasts={toasts} onDismiss={dismiss} />
+
+            {/* ── Hero ── */}
+            <section className="hero">
+                <div className="announce">
+                    <div className="dot"><div className="pulse" /></div>
+                    <p>Now powered by Gemini 2.5 Flash</p>
                 </div>
 
-                <p>Introducing BetterView 2.0</p>
-            </div>
+                <h1>Turn 2D blueprints into<br /> photorealistic 3D renders</h1>
 
-            <h1>Build beatiful spaces at the speed of thought with BetterView</h1>
+                <p className="subtitle">
+                    Upload any floor plan and let our AI generate a fully furnished, top-down 3D architectural render — completely free.
+                </p>
 
-            <p className="subtitle">
-                BetterView is an AI-first design environment that helps you visualize, render, and ship architectural projects faster that ever.
-            </p>
-
-            <div className="actions">
                 <a href="#upload" className="cta">
-                    start building <ArrowRight className="icon"/>
+                    Start for Free <ArrowRight className="icon" />
                 </a>
 
-                <Button variant="outline" size="lg" className="demo">
-                    Watch Demo
-                </Button>
-            </div>
-
-            <div id="upload" className="upload-shell">
-                <div className="grid-overlay"/>
-
-                <div className="upload-card">
-                    <div className="upload-head">
-                        <div className="upload-icon">
-                            <Layers className="icon"/>
+                {/* Upload shell */}
+                <div id="upload" className="upload-shell">
+                    <div className="grid-overlay" />
+                    <div className="upload-card">
+                        <div className="upload-head">
+                            <div className="upload-icon"><Layers3 className="icon" /></div>
+                            <h3>Upload your floor plan</h3>
+                            <p>PNG, JPG, WEBP — up to 10MB</p>
                         </div>
-
-                        <h3>Upload your floor plan</h3>
-                        <p>Supports JPG, PNG, Formate up to 10MB</p>
-                    </div>
-
-                    <p>Upload images</p>
-                </div>
-            </div>
-        </section>
-
-        <section className="projects">
-            <div className="section-inner">
-                <div className="section-head">
-                    <div className="copy">
-                        <h2>Projects</h2>
-                        <p>Your latest work and shared community projects, all in one place</p>
+                        <Dropzone onUploadComplete={handleUploadComplete} onError={msg => addToast(msg, "error")} />
                     </div>
                 </div>
+            </section>
 
-                <div className="projects-grid">
-                    <div className="projects-card group">
-                        <div className="preview">
-                            <img src="https://roomify-mlhuk267-dfwu1i.puter.site/projects/1770803585402/rendered.png"
-                             alt="project"/>
-
-                            <div className="badge">
-                                <span>Community</span>
+            {/* ── Features ── */}
+            <section className="features">
+                <div className="section-inner">
+                    <h2 className="section-title">Why BetterView?</h2>
+                    <div className="features-grid">
+                        {FEATURES.map(({ icon: Icon, title, description }) => (
+                            <div key={title} className="feature-card">
+                                <div className="feature-icon"><Icon size={22} /></div>
+                                <h3>{title}</h3>
+                                <p>{description}</p>
                             </div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
+            {/* ── Recent Projects ── */}
+            {projects.length > 0 && (
+                <section className="projects">
+                    <div className="section-inner">
+                        <div className="section-head">
+                            <div className="copy">
+                                <h2>{isSignedIn ? "Your Projects" : "Community Projects"}</h2>
+                                <p>{isSignedIn ? `Welcome back, ${userName}!` : "Sign in to see your past projects."}</p>
+                            </div>
+                            {isSignedIn && (
+                                <a href="/dashboard" className="btn-ghost">View All →</a>
+                            )}
                         </div>
-
-                        <div className="card-body">
-                            <div>
-                                <h3>Project manhattan</h3>
-
-                                <div className="meta">
-                                    <Clock size={12}/>
-                                    <span>{new Date('02,01,2027'). toLocaleDateString()}</span>
-                                    <span>By ravi</span>
+                        <div className="projects-grid">
+                            {projects.slice(0, 6).map(({ id, name, renderedImage, renderedUrl, sourceImage, sourceUrl, timestamp }) => (
+                                <div key={id} className="project-card group" onClick={() => navigate(`/visualizer/${id}`)}>
+                                    <div className="preview">
+                                        <img src={renderedUrl || renderedImage || sourceUrl || sourceImage} alt={name} />
+                                        {(renderedImage || renderedUrl) && (
+                                            <div className="badge"><span>3D Rendered</span></div>
+                                        )}
+                                    </div>
+                                    <div className="card-body">
+                                        <div>
+                                            <h3>{name}</h3>
+                                            <div className="meta">
+                                                <Clock size={12} />
+                                                <span>{new Date(timestamp).toLocaleDateString()}</span>
+                                            </div>
+                                        </div>
+                                        <div className="arrow"><ArrowUpRight size={18} /></div>
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="arrow">
-                                <ArrowUpRigh size={18}/>
-                            </div>
+                            ))}
                         </div>
                     </div>
-                </div>
-            </div>
-        </section>
-      </div>
-  )
-
-
+                </section>
+            )}
+        </div>
+    );
 }

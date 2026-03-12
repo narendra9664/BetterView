@@ -9,12 +9,12 @@ import {
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import {useEffect, useState} from "react";
+import { useEffect, useState } from "react";
 import {
   getCurrentUser,
   signIn as puterSignIn,
   signOut as puterSignOut,
-} from "../lib/puter.action";
+} from "../lib/db.action";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -56,7 +56,7 @@ const DEFAULT_AUTH_STATE: AuthState = {
 export default function App() {
   const [authState, setAuthState] = useState<AuthState>(DEFAULT_AUTH_STATE);
 
-  const refreshAuth = async  () => {
+  const refreshAuth = async () => {
     try {
       const user = await getCurrentUser();
 
@@ -73,7 +73,7 @@ export default function App() {
 
   useEffect(() => {
     refreshAuth();
-  })
+  }, []);
 
   const signIn = async () => {
     await puterSignIn();
@@ -86,11 +86,11 @@ export default function App() {
   }
 
   return (
-      <main className="min-h-screen bg-background text-foreground relative z-10">
-          <Outlet
-           context={{...authState, refreshAuth, signIn, signOut  }}
-          />;
-</main>)
+    <main className="min-h-screen bg-background text-foreground relative z-10">
+      <Outlet
+        context={{ ...authState, refreshAuth, signIn, signOut }}
+      />;
+    </main>)
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

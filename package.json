@@ -9,14 +9,24 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
-    "@heyputer/puter.js": "^2.2.10",
+    "@fal-ai/client": "^1.9.4",
+    "@google/genai": "^1.44.0",
+    "@gradio/client": "^2.1.0",
     "@react-router/node": "7.12.0",
     "@react-router/serve": "7.12.0",
+    "@react-three/csg": "^4.0.0",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "@types/three": "^0.183.1",
+    "idb-keyval": "^6.2.2",
     "isbot": "^5.1.31",
     "lucide-react": "^0.574.0",
+    "playwright": "^1.58.2",
     "react": "^19.2.4",
+    "react-compare-slider": "^3.1.0",
     "react-dom": "^19.2.4",
-    "react-router": "7.12.0"
+    "react-router": "7.12.0",
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@react-router/dev": "7.12.0",

@@ -1,14 +1,19 @@
-interface AuthState {
-    isSignedIn: boolean;
-    userName: string | null,
-    userId: string | null,
+// Shared type definitions for BetterView
+export { };
+
+declare global {
+    interface AuthState {
+        isSignedIn: boolean;
+        userName: string | null;
+        userId: string | null;
+    }
 }
 
-type AuthContext = {
+export type AuthOutletContext = {
     isSignedIn: boolean;
     userName: string | null;
     userId: string | null;
-    refreshAuth: () => Promise<boolean>;
-    signIn: () => Promise<boolean>;
-    signOut: () => Promise<boolean>;
-}
+    refreshAuth: () => Promise<void>;
+    signIn: () => Promise<void>;
+    signOut: () => Promise<void>;
+};
