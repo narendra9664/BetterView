@@ -39,8 +39,7 @@ export function meta() {
 }
 
 // ─── SERVER ACTION ─────────────────────────────────────────────────────────────
-// Uses Groq API (OpenAI-compatible) — fast, reliable, server-side only.
-// Model: llama-3.2-11b-vision-preview (native vision support on Groq)
+// Forwards the uploaded image to our local Python OpenCV backend instead of Groq.
 
 export async function action({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
@@ -50,102 +49,44 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "No image data provided" }, { status: 400 });
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    return Response.json(
-      { error: "GROQ_API_KEY not set in .env file." },
-      { status: 500 }
-    );
-  }
-
   try {
-    const { ANALYSIS_PROMPT } = await import("../../lib/ai");
+    console.log("[BetterView] Sending image to local Python backend...");
 
-    // Rebuild a clean data URI so Groq receives a properly-prefixed base64 URL
+    // 1. Rebuild base64 URL
     const mimeType: string =
-      imageData.startsWith("data:image/png")  ? "image/png"  :
-      imageData.startsWith("data:image/webp") ? "image/webp" :
-      "image/jpeg";
-    const base64Data   = imageData.includes(",") ? imageData.split(",")[1] : imageData;
+      imageData.startsWith("data:image/png") ? "image/png" :
+        imageData.startsWith("data:image/webp") ? "image/webp" :
+          "image/jpeg";
+    const base64Data = imageData.includes(",") ? imageData.split(",")[1] : imageData;
     const imageDataUrl = `data:${mimeType};base64,${base64Data}`;
 
-    console.log("[BetterView] Calling Groq Vision API (llama-3.2-11b-vision-preview)...");
+    // 2. Convert base64 to Blob so Python can read it as a file
+    const fetchResponse = await fetch(imageDataUrl);
+    const blob = await fetchResponse.blob();
 
-    // ── Groq fetch ─────────────────────────────────────────────────────────────
-    const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), 60_000);
+    const pyFormData = new FormData();
+    pyFormData.append("file", blob, "floorplan.jpg");
 
-    let raw: string;
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method:  "POST",
-        signal:  controller.signal,
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type":  "application/json",
-        },
-        body: JSON.stringify({
-          model:       "llama-3.2-11b-vision-preview",
-          temperature: 0.1,
-          max_tokens:  4096,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text",      text: ANALYSIS_PROMPT },
-                { type: "image_url", image_url: { url: imageDataUrl } },
-              ],
-            },
-          ],
-        }),
-      });
+    // 3. Send it to Python
+    const res = await fetch("http://127.0.0.1:8000/api/analyze-floorplan", {
+      method: "POST",
+      body: pyFormData,
+    });
 
-      // Log the full HTTP status so errors are immediately visible in server logs
-      console.log(`[BetterView] Groq response status: ${res.status} ${res.statusText}`);
-
-      const json = await res.json() as any;
-
-      if (!res.ok || json.error) {
-        // Surface the complete error object for easy debugging
-        console.error("[BetterView] Groq error response:", JSON.stringify(json, null, 2));
-        const msg = json.error?.message || json.error || `HTTP ${res.status} ${res.statusText}`;
-        throw new Error(`Groq API error (${res.status}): ${msg}`);
-      }
-
-      raw = json.choices?.[0]?.message?.content ?? "";
-      if (!raw) throw new Error("Groq returned an empty response — possible safety filter or quota issue");
-
-    } finally {
-      clearTimeout(timeout);
+    if (!res.ok) {
+      throw new Error(`Python API error: ${res.statusText}`);
     }
 
-    // ── Parse JSON from the model response ───────────────────────────────────────
-    const cleaned   = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-    const jsonStart = cleaned.indexOf("{");
-    const jsonEnd   = cleaned.lastIndexOf("}");
-    if (jsonStart === -1 || jsonEnd === -1) {
-      throw new Error("No JSON object found in Groq response");
-    }
+    // Grab the REAL room data from OpenCV
+    const floorPlanData = await res.json();
+    console.log("[BetterView] OpenCV successfully extracted rooms:", floorPlanData.rooms?.length);
 
-    const floorPlanData = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1)) as FloorPlanData;
-    if (!Array.isArray(floorPlanData.rooms) || floorPlanData.rooms.length === 0) {
-      throw new Error("AI found no rooms — try a clearer floor plan image");
-    }
-
-    // Sanitise each room so downstream 3D code never crashes on missing fields
-    floorPlanData.rooms = floorPlanData.rooms.map((r: any, i: number) => ({
-      ...r,
-      id:      r.id ?? `r${i + 1}`,
-      doors:   Array.isArray(r.doors)   ? r.doors   : [],
-      windows: Array.isArray(r.windows) ? r.windows : [],
-    }));
-
-    console.log(`[BetterView] Groq success — found ${floorPlanData.rooms.length} rooms`);
-    return Response.json({ floorPlanData, source: "llama-3.2-11b-vision-preview" });
+    // WE DELETED THE FALLBACK CODE HERE! 
+    // Now we return the actual math generated by your Python script.
+    return Response.json({ floorPlanData, source: "python-opencv" });
 
   } catch (err) {
-    // Log the full error object (not just .message) so HTTP codes are visible
-    console.error("[BetterView] Groq analysis failed — full error:", err);
+    console.error("[BetterView] Python analysis failed — full error:", err);
     const msg = err instanceof Error ? err.message : String(err);
     return Response.json({ error: msg, source: "error" }, { status: 500 });
   }
@@ -229,7 +170,7 @@ export default function Visualizer() {
     }
     setGenStatus("analyzing");
     setGeminiError(null);
-    addToast("Sending floor plan to server for AI analysis…", "info");
+    addToast("Sending floor plan to OpenCV engine for structural extraction…", "info");
     try {
       // Resize client-side first: reduces payload ~2-5MB → ~150-300KB
       const resized = await resizeImage(sourceImg, 1024, 0.85);
@@ -330,7 +271,7 @@ export default function Visualizer() {
             </div>
             <div className="gen-status">
               <Loader2 size={24} className="animate-spin text-orange-500" />
-              <p className="gen-status__text">Analysing floor plan with Llama 3.2 11B Vision…</p>
+              <p className="gen-status__text">Analysing floor plan with Python & OpenCV…</p>
               <p className="gen-status__hint">Running server-side · Reading rooms, walls &amp; doors</p>
               <div className="gen-steps">
                 <div className="gen-step gen-step--active">
@@ -378,7 +319,7 @@ export default function Visualizer() {
                 Generate 3D Render
               </button>
               <p className="visualizer__powered">
-                Powered by Llama 3.2 11B Vision · Groq · Vision Analysis
+                Powered by Python OpenCV · Local Backend Analysis
               </p>
             </div>
           </div>

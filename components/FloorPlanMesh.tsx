@@ -206,12 +206,28 @@ export default function FloorPlanMesh({
         </div>
 
         <button
-          className="btn-export mesh-controls__export"
           onClick={handleExport}
           disabled={exporting}
+          style={{
+            position: "absolute",
+            top: "20px",
+            right: "20px",
+            zIndex: 9999,
+            backgroundColor: "#ea580c", // Bright orange
+            color: "white",
+            padding: "12px 20px",
+            borderRadius: "8px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            cursor: "pointer",
+            border: "none",
+            fontWeight: "bold",
+            boxShadow: "0 4px 6px rgba(0,0,0,0.3)"
+          }}
         >
-          <Download size={14} />
-          {exporting ? "Exporting…" : "Export GLTF"}
+          <Download size={16} />
+          {exporting ? "Exporting..." : "Download 3D Model"}
         </button>
       </div>
 
