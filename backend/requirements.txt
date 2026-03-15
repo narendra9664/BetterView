@@ -1,5 +1,22 @@
+# BetterView Phase 1 – Structural Engine Dependencies
+# ─────────────────────────────────────────────────────
+
+# Web framework
 fastapi
 uvicorn
+
+# Image processing
 opencv-python
 numpy
+
+# Topology graph engine
+networkx
+
+# File upload handling
 python-multipart
+
+# AI model inference (optional – used for door/window detection)
+# If you have a trained YOLO model (best.pt), install this:
+ultralytics
+torch
+torchvision
