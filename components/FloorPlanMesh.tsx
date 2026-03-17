@@ -245,7 +245,7 @@ export default function FloorPlanMesh({
 
           {/* ── Cinematic Environment ── */}
           <color attach="background" args={["#0a0a0c"]} />
-          <fog attach="fog" args={["#0a0a0c", 10, 50]} />
+
 
           <ambientLight intensity={0.4} />
 

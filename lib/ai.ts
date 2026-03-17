@@ -51,12 +51,17 @@ export interface FloorPlanRoom {
 }
 
 export interface FloorPlanData {
+  sceneW?: number;
+  sceneD?: number;
   totalWidth: number;
   totalHeight: number;
   hasStairs: boolean;
   hasBalcony: boolean;
-  rooms: FloorPlanRoom[];
-  stairs?: StairInfo[];
+  walls?: any[];
+  doors?: any[];
+  windows?: any[];
+  stairs?: any[];
+  rooms: any[];
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
@@ -122,9 +127,8 @@ export const analyzeFloorPlan = async (
     const pythonData = await res.json();
     console.log("✅ SUCCESS! Python backend responded:", pythonData);
 
-    // 5. Temporarily return the fallback data so the 3D visualizer doesn't crash.
-    // Once we write the OpenCV math in Python, we will return the real data here.
-    return createFallbackFloorPlan();
+    // 5. Return the REAL room data from OpenCV
+    return pythonData;
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

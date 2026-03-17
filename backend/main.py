@@ -67,6 +67,9 @@ GRID_SIZE = 100.0           # Normalized coordinate space (0-100) for React
 WALL_THICKNESS_RATIO = 0.02 # Walls are ~2% of image width (typical for floor plans)
 MIN_ROOM_AREA_RATIO = 0.005 # Ignore contours smaller than 0.5% of image area
 CORNER_SNAP_DISTANCE = 8    # Pixels - nodes closer than this merge into one
+MIN_WALL_THICKNESS = 5      # Pixels - lines thinner than this are dimension lines
+MIN_SUBGRAPH_NODES = 4      # Isolated clusters smaller than this get pruned
+TJUNCTION_SEARCH_DIST = 25  # Pixels - max ray-cast distance to seal T-junctions
 
 
 # ==============================================================================
@@ -78,48 +81,34 @@ CORNER_SNAP_DISTANCE = 8    # Pixels - nodes closer than this merge into one
 
 def extract_wall_mask(img: np.ndarray) -> np.ndarray:
     """
-    Convert the floor plan image into a binary mask where
-    white pixels = walls, black pixels = everything else.
-
-    Strategy:
-      1. Convert to grayscale
-      2. Apply adaptive thresholding (handles uneven lighting/scan quality)
-      3. Morphological closing (fills small gaps in wall lines)
-      4. Remove tiny noise particles
+    Convert the floor plan into a pure binary mask using YOLO!
+    This explicitly ignores text, furniture, and dimensions.
     """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape
+    h, w = img.shape[:2]
+    blueprint = np.zeros((h, w), dtype=np.uint8)
 
-    # Adaptive threshold works better than a fixed cutoff because
-    # floor plan images can have uneven brightness across the page
-    binary = cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,          # Invert so walls become white
-        blockSize=15,                    # Neighborhood size for threshold calc
-        C=10                             # Constant subtracted from mean
-    )
+    if yolo_model is not None:
+        # 1. Use YOLO to draw ONLY the structural elements
+        results = yolo_model(img)
+        for result in results:
+            for box in result.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                class_name = yolo_model.names[int(box.cls[0].item())].lower()
+                
+                if class_name in ['wall', 'door', 'window', 'opening']:
+                    cv2.rectangle(blueprint, (x1, y1), (x2, y2), 255, -1)
+        
+        # 2. The Mathematical Caulk: Dilate the YOLO boxes to seal tiny pixel gaps 
+        # between doors and walls so the rooms don't bleed together.
+        kernel = np.ones((15, 15), np.uint8)
+        blueprint = cv2.dilate(blueprint, kernel, iterations=2)
+        
+    else:
+        print("[BetterView] [ERROR] YOLO not loaded. Falling back to messy OpenCV...")
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blueprint = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 10)
 
-    # Morphological "closing" = dilate then erode.
-    # This fills tiny gaps in wall lines (like dashed walls or scan artifacts)
-    # while keeping the overall wall shape intact.
-    wall_thickness_px = max(3, int(min(h, w) * WALL_THICKNESS_RATIO))
-    kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (wall_thickness_px, wall_thickness_px)
-    )
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    # Remove small noise (specks of dust, stray text remnants)
-    # by keeping only connected components above a minimum area
-    min_area = int(h * w * 0.0002)  # 0.02% of image area
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(closed)
-    cleaned = np.zeros_like(closed)
-    for i in range(1, num_labels):  # skip background (label 0)
-        if stats[i, cv2.CC_STAT_AREA] >= min_area:
-            cleaned[labels == i] = 255
-
-    return cleaned
+    return blueprint
 
 
 # ==============================================================================
@@ -255,6 +244,25 @@ def build_wall_graph(
 
             hv_lines.append((x1, y1, x2, y2))
 
+    # ──────────────────────────────────────────────────────────────
+    # FIX 1: DIMENSION LINE FILTER (Aspect Ratio & Thickness)
+    # ──────────────────────────────────────────────────────────────
+    # Real walls are thick (≥5 pixels).  Dimension / leader lines
+    # are hair-thin (1-3 pixels).  For every candidate line we
+    # measure its *actual perpendicular thickness* inside the
+    # wall_mask.  If the average thickness is below MIN_WALL_THICKNESS
+    # the line is a dimension annotation, not a wall → discard it.
+    thick_lines = []
+    for x1, y1, x2, y2 in hv_lines:
+        thickness = _measure_line_thickness(wall_mask, x1, y1, x2, y2)
+        if thickness >= MIN_WALL_THICKNESS:
+            thick_lines.append((x1, y1, x2, y2))
+
+    rejected = len(hv_lines) - len(thick_lines)
+    if rejected:
+        print(f"[BetterView] [FIX-1] Dimension-line filter removed {rejected} thin lines.")
+    hv_lines = thick_lines
+
     # -- 3c. Collect all endpoints as potential corner nodes --
     raw_points = []
     for x1, y1, x2, y2 in hv_lines:
@@ -285,7 +293,26 @@ def build_wall_graph(
         G.add_node(p2, x=p2[0], y=p2[1])
         G.add_edge(p1, p2, length=length, is_horizontal=is_horiz)
 
-    print(f"[BetterView] Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    print(f"[BetterView] Graph (raw): {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+
+    # ──────────────────────────────────────────────────────────────
+    # FIX 2: ISOLATED SUBGRAPH PRUNER
+    # ──────────────────────────────────────────────────────────────
+    # A real building is one big connected skeleton.  Floating
+    # table edges / car outlines form tiny isolated clusters of
+    # 2-3 nodes.  We keep only components with ≥ MIN_SUBGRAPH_NODES.
+    G = _prune_isolated_subgraphs(G)
+
+    # ──────────────────────────────────────────────────────────────
+    # FIX 3: T-JUNCTION EXTENDER (Ray-Cast Gap Sealer)
+    # ──────────────────────────────────────────────────────────────
+    # Dead-end nodes (degree 1) often sit just a few pixels short
+    # of a perpendicular wall.  We cast a ray in the wall direction
+    # and, if it hits another edge, stretch the wall to form a
+    # perfect T-junction.
+    G = _extend_t_junctions(G)
+
+    print(f"[BetterView] Graph (clean): {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G
 
 
@@ -327,6 +354,212 @@ def _find_nearest(points: list, target: tuple) -> tuple:
             best_dist = d
             best = p
     return best
+
+
+# ==============================================================================
+# FIX 1 HELPER: Measure perpendicular thickness of a line in the wall mask
+# ==============================================================================
+# Imagine holding a ruler *across* a wall (not along it).  We do this at several
+# points along the line and average the measurement.  A real wall might measure
+# 8-15 px; a dimension leader line measures 1-3 px.
+
+def _measure_line_thickness(
+    wall_mask: np.ndarray,
+    x1: int, y1: int,
+    x2: int, y2: int,
+    num_samples: int = 7,
+    max_probe: int = 30,
+) -> float:
+    """
+    Sample the wall_mask perpendicular to the line at `num_samples` points.
+    Return the average thickness (in pixels).
+    """
+    h, w = wall_mask.shape[:2]
+    is_horizontal = (y1 == y2)
+    thicknesses = []
+
+    for i in range(num_samples):
+        # Pick a point along the line  (0.1 … 0.9 to stay away from endpoints)
+        t = 0.1 + 0.8 * i / max(1, num_samples - 1)
+        cx = int(x1 + t * (x2 - x1))
+        cy = int(y1 + t * (y2 - y1))
+
+        count = 0
+        if is_horizontal:
+            # Probe vertically (up and down)
+            for dy in range(-max_probe, max_probe + 1):
+                py = cy + dy
+                if 0 <= py < h and wall_mask[py, cx] > 0:
+                    count += 1
+        else:
+            # Probe horizontally (left and right)
+            for dx in range(-max_probe, max_probe + 1):
+                px = cx + dx
+                if 0 <= px < w and wall_mask[cy, px] > 0:
+                    count += 1
+
+        thicknesses.append(count)
+
+    return float(np.mean(thicknesses)) if thicknesses else 0.0
+
+
+# ==============================================================================
+# FIX 2: Isolated Subgraph Pruner
+# ==============================================================================
+# In Graph Theory a "connected component" is a group of nodes where you can
+# walk from any node to any other.  A real house is ONE big component.
+# A stray table edge might add a tiny 2-node component.  We delete any
+# component smaller than MIN_SUBGRAPH_NODES.
+
+def _prune_isolated_subgraphs(G: nx.Graph) -> nx.Graph:
+    """
+    Remove tiny disconnected clusters (furniture ghosts, car outlines, etc.).
+    Keeps only connected components with >= MIN_SUBGRAPH_NODES nodes.
+    """
+    if G.number_of_nodes() == 0:
+        return G
+
+    components = list(nx.connected_components(G))
+    pruned = 0
+
+    for comp in components:
+        if len(comp) < MIN_SUBGRAPH_NODES:
+            G.remove_nodes_from(comp)
+            pruned += len(comp)
+
+    if pruned:
+        print(f"[BetterView] [FIX-2] Subgraph pruner removed {pruned} floating nodes.")
+    return G
+
+
+# ==============================================================================
+# FIX 3: T-Junction Extender (Ray-Cast Gap Sealer)
+# ==============================================================================
+# When a wall ends just *short* of another wall we get a visible gap.
+# This fix looks at every "dead-end" node (degree == 1) and asks:
+#   "If I keep going in the same direction, do I hit another wall?"
+# If yes, it stretches the wall to create a watertight T-junction.
+#
+# Analogy: Imagine pushing a curtain rod until it touches the opposite wall.
+#          That's exactly what this function does for each dangling wall end.
+
+def _extend_t_junctions(G: nx.Graph) -> nx.Graph:
+    """
+    For each degree-1 node, cast a ray along the wall's direction.
+    If the ray intersects (or nearly touches) an existing edge,
+    split that edge and create a T-junction.
+    """
+    if G.number_of_nodes() == 0:
+        return G
+
+    extensions_made = 0
+    max_iterations = 3  # Repeat a few times - fixing one gap may reveal another
+
+    for _iteration in range(max_iterations):
+        new_extensions = 0
+        dead_ends = [n for n in G.nodes() if G.degree(n) == 1]
+
+        for node in dead_ends:
+            if G.degree(node) != 1:
+                continue  # May have changed from a previous extension this round
+
+            neighbor = list(G.neighbors(node))[0]
+            edge_data = G.edges[node, neighbor]
+            is_horiz = edge_data.get("is_horizontal", True)
+
+            # Direction vector: node → away from neighbor (the "open" end)
+            dx = node[0] - neighbor[0]
+            dy = node[1] - neighbor[1]
+            length = max(1.0, np.sqrt(dx*dx + dy*dy))
+            dx_norm = dx / length
+            dy_norm = dy / length
+
+            # Cast a ray from the dead-end node
+            best_hit = None
+            best_dist = float("inf")
+
+            for (e1, e2) in list(G.edges()):
+                if node in (e1, e2):
+                    continue  # Skip the node's own edge
+
+                target_is_horiz = G.edges[e1, e2].get("is_horizontal", True)
+
+                # We want perpendicular hits (H-wall → V-wall or V → H)
+                if target_is_horiz == is_horiz:
+                    continue
+
+                # Project the dead-end onto the target edge
+                if target_is_horiz:
+                    # Target is horizontal: check if dead-end's Y is close to target's Y
+                    target_y = (e1[1] + e2[1]) / 2
+                    # The ray must be heading toward target_y
+                    if abs(dy_norm) < 0.5:
+                        continue
+                    dist_y = target_y - node[1]
+                    if (dist_y * dy_norm) < 0:
+                        continue  # Wrong direction
+                    abs_dist = abs(dist_y)
+                    if abs_dist > TJUNCTION_SEARCH_DIST:
+                        continue
+                    # Check if the node's X falls within the target edge's X range
+                    min_x = min(e1[0], e2[0]) - 3
+                    max_x = max(e1[0], e2[0]) + 3
+                    if not (min_x <= node[0] <= max_x):
+                        continue
+                    if abs_dist < best_dist:
+                        best_dist = abs_dist
+                        hit_point = (node[0], int(target_y))
+                        best_hit = (e1, e2, hit_point)
+                else:
+                    # Target is vertical: check if dead-end's X is close to target's X
+                    target_x = (e1[0] + e2[0]) / 2
+                    if abs(dx_norm) < 0.5:
+                        continue
+                    dist_x = target_x - node[0]
+                    if (dist_x * dx_norm) < 0:
+                        continue  # Wrong direction
+                    abs_dist = abs(dist_x)
+                    if abs_dist > TJUNCTION_SEARCH_DIST:
+                        continue
+                    min_y = min(e1[1], e2[1]) - 3
+                    max_y = max(e1[1], e2[1]) + 3
+                    if not (min_y <= node[1] <= max_y):
+                        continue
+                    if abs_dist < best_dist:
+                        best_dist = abs_dist
+                        hit_point = (int(target_x), node[1])
+                        best_hit = (e1, e2, hit_point)
+
+            # If we found a hit, create the T-junction
+            if best_hit is not None:
+                e1, e2, hit_point = best_hit
+                target_data = G.edges[e1, e2]
+
+                # 1. Remove the old target edge
+                G.remove_edge(e1, e2)
+
+                # 2. Add the new junction node
+                G.add_node(hit_point, x=hit_point[0], y=hit_point[1])
+
+                # 3. Split the target edge at the hit point
+                len_a = np.sqrt((hit_point[0]-e1[0])**2 + (hit_point[1]-e1[1])**2)
+                len_b = np.sqrt((hit_point[0]-e2[0])**2 + (hit_point[1]-e2[1])**2)
+                G.add_edge(e1, hit_point, length=len_a, is_horizontal=target_data["is_horizontal"])
+                G.add_edge(hit_point, e2, length=len_b, is_horizontal=target_data["is_horizontal"])
+
+                # 4. Connect the dead-end to the new junction
+                ext_len = np.sqrt((hit_point[0]-node[0])**2 + (hit_point[1]-node[1])**2)
+                G.add_edge(node, hit_point, length=ext_len, is_horizontal=is_horiz)
+
+                new_extensions += 1
+
+        extensions_made += new_extensions
+        if new_extensions == 0:
+            break  # No more gaps to seal
+
+    if extensions_made:
+        print(f"[BetterView] [FIX-3] T-junction extender sealed {extensions_made} gaps.")
+    return G
 
 
 # ==============================================================================
@@ -489,67 +722,87 @@ def _find_closest_edge(
 
 def build_floorplan_json(
     rooms_px: list,
+    doors_px: list, 
+    windows_px: list,
     img_h: int,
     img_w: int,
     graph: nx.Graph,
 ) -> dict:
-    """
-    Convert pixel-space room data into the FloorPlanData JSON schema
-    that the React frontend expects.
+    
+    GRID_SIZE = 100.0
+    aspect_ratio = img_h / img_w
+    scene_depth = GRID_SIZE * aspect_ratio
 
-    Schema (matches lib/ai.ts FloorPlanData):
-    {
-      totalWidth: 100,
-      totalHeight: 100,
-      hasStairs: false,
-      hasBalcony: false,
-      rooms: [
-        {
-          id: "r1",
-          name: "Room 1",
-          type: "other",      <- Phase 1: no semantic labeling
-          bounds: { x, y, w, h },   <- normalized 0-100
-          doors: [ { type, edge, position, width } ],
-          windows: [ { edge, position, width } ]
-        }
-      ]
-    }
-    """
+    # 1. Extract perfectly snapped walls from NetworkX Edges
+    walls_json = []
+    for p1, p2, edge_data in graph.edges(data=True):
+        cx_px = (p1[0] + p2[0]) / 2
+        cy_px = (p1[1] + p2[1]) / 2
+        
+        # Convert to 0-100 React Grid
+        cx = (cx_px / img_w) * GRID_SIZE
+        cz = (cy_px / img_h) * scene_depth
+        length = (edge_data["length"] / img_w) * GRID_SIZE
+        
+        walls_json.append({
+            "centerX": cx,
+            "centerZ": cz,
+            "length": length,
+            "thickness": 1.5, # Standardized 3D wall thickness
+            "isHorizontal": edge_data["is_horizontal"]
+        })
+
+    # 2. Extract Doors for global wall-cutting
+    doors_json = []
+    for d in doors_px:
+        doors_json.append({
+            "centerX": (d["cx_px"] / img_w) * GRID_SIZE,
+            "centerZ": (d["cy_px"] / img_h) * scene_depth,
+            "width": max((d["w_px"] / img_w) * GRID_SIZE, 3.0), # Ensure minimum door width
+            "isHorizontal": d["is_horizontal"],
+            "type": d.get("type", "internal")
+        })
+
+    # 3. Extract Windows for global wall-cutting
+    windows_json = []
+    for w in windows_px:
+        windows_json.append({
+            "centerX": (w["cx_px"] / img_w) * GRID_SIZE,
+            "centerZ": (w["cy_px"] / img_h) * scene_depth,
+            "width": max((w["w_px"] / img_w) * GRID_SIZE, 3.0),
+            "isHorizontal": w["is_horizontal"],
+            "height": 1.2
+        })
+
+    # 4. Extract Rooms (for the floor tiles)
     rooms_json = []
-
     for idx, room in enumerate(rooms_px):
-        # Convert pixel -> normalized (0-100)
-        nx_ = (room["x"] / img_w) * GRID_SIZE
-        ny_ = (room["y"] / img_h) * GRID_SIZE
+        nx_ = ((room["x"] + room["w"]/2) / img_w) * GRID_SIZE
+        ny_ = ((room["y"] + room["h"]/2) / img_h) * scene_depth
         nw_ = (room["w"] / img_w) * GRID_SIZE
-        nh_ = (room["h"] / img_h) * GRID_SIZE
+        nh_ = (room["h"] / img_h) * scene_depth
 
-        room_entry = {
+        rooms_json.append({
             "id": f"r{idx + 1}",
-            "name": f"Room {idx + 1}",  # Phase 1: generic names, no OCR/semantic
-            "type": "other",             # Phase 1: no room type classification
-            "bounds": {
-                "x": round(nx_, 2),
-                "y": round(ny_, 2),
-                "w": round(nw_, 2),
-                "h": round(nh_, 2),
-            },
-            "doors": room.get("doors", []),
-            "windows": room.get("windows", []),
-        }
-        rooms_json.append(room_entry)
+            "name": f"Room {idx + 1}",
+            "type": "other",
+            "cx": nx_,
+            "cz": ny_,
+            "w": nw_,
+            "d": nh_,
+        })
 
     return {
+        "sceneW": GRID_SIZE,
+        "sceneD": scene_depth,
         "totalWidth": GRID_SIZE,
-        "totalHeight": GRID_SIZE,
+        "totalHeight": scene_depth,
         "hasStairs": False,
         "hasBalcony": False,
+        "walls": walls_json,
+        "doors": doors_json,
+        "windows": windows_json,
         "rooms": rooms_json,
-        # Topology metadata (not consumed by frontend yet, but useful for debugging)
-        "_topology": {
-            "graphNodes": graph.number_of_nodes(),
-            "graphEdges": graph.number_of_edges(),
-        },
     }
 
 
@@ -718,7 +971,7 @@ async def analyze_floorplan(file: UploadFile = File(...)):
         rooms_px = assign_openings_to_rooms(rooms_px, doors_px, windows_px)
 
         # -- Build the final JSON payload --
-        result = build_floorplan_json(rooms_px, img_h, img_w, graph)
+        result = build_floorplan_json(rooms_px, doors_px, windows_px, img_h, img_w, graph)
 
         # -- Save debug image --
         import os
