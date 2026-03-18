@@ -2,7 +2,10 @@ import type { Route } from "./+types/home";
 import Navbar from "../../components/Navbar";
 import Dropzone from "../../components/Dropzone";
 import Toast, { useToast } from "../../components/ui/Toast";
-import { ArrowRight, ArrowUpRight, Clock, ScanLine, Layers3, Box } from "lucide-react";
+import {
+    ArrowRight, ArrowUpRight, Clock, ScanLine, Layers3, Box,
+    Zap, Droplets, Flame, Building2, TrendingUp, Star, MapPin
+} from "lucide-react";
 import { useNavigate } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import { createProject, getProjects, type DesignItem } from "../../lib/db.action";
@@ -17,9 +20,37 @@ export function meta({ }: Route.MetaArgs) {
 }
 
 const FEATURES = [
-    { icon: ScanLine, title: "Precise Geometry", description: "Walls, doors, and windows are perfectly preserved from your original sketch." },
-    { icon: Layers3, title: "AI-Powered", description: "Uses Llama 3.2 11B Vision, one of the world's most capable open-source vision AI models via Hugging Face." },
-    { icon: Box, title: "3D Mesh Export", description: "Pro users can download a .gltf or .obj 3D model for use in any 3D software." },
+    {
+        icon: ScanLine,
+        title: "Precise Geometry",
+        description: "Walls, doors, and windows are perfectly preserved from your original sketch via OpenCV computer vision.",
+        accent: "#4a7bff",
+    },
+    {
+        icon: Zap,
+        title: "Utility Overlays",
+        description: "Visualise electrical circuits, gas lines, and water pipes directly on your 3D floor plan in real time.",
+        accent: "#00ffb8",
+    },
+    {
+        icon: Building2,
+        title: "Property Analytics",
+        description: "Live mortgage calculator, similar property comparisons, and valuation estimates built right in.",
+        accent: "#F26B22",
+    },
+    {
+        icon: Layers3,
+        title: "3D Mesh Export",
+        description: "Pro users can download a .gltf or .obj 3D model for use in any 3D software.",
+        accent: "#a855f7",
+    },
+];
+
+const STATS = [
+    { value: "10K+", label: "Floor Plans Rendered" },
+    { value: "98%", label: "AI Accuracy" },
+    { value: "< 30s", label: "Avg. Render Time" },
+    { value: "Free", label: "To Start" },
 ];
 
 export default function Home() {
@@ -33,23 +64,18 @@ export default function Home() {
         if (isCreatingRef.current) return;
         isCreatingRef.current = true;
         try {
-            const name = `Residence ${projectId}`;
+            const name = `Residence ${projectId.slice(-4)}`;
             const item: DesignItem = {
                 id: projectId,
                 name,
-                sourceUrl: "",       // Will be set after hosting
-                sourceImage: base64, // Base64 fallback
+                sourceUrl: "",
+                sourceImage: base64,
                 timestamp: Date.now(),
             };
-
             const saved = await createProject(item);
-            if (!saved) {
-                addToast("Failed to save your project. Please try again.", "error");
-                return;
-            }
-
+            if (!saved) { addToast("Failed to save your project. Please try again.", "error"); return; }
             setProjects(prev => [saved, ...prev]);
-            addToast("Floor plan uploaded! Redirecting to visualizer...", "success");
+            addToast("Floor plan uploaded! Redirecting…", "success");
             setTimeout(() => navigate(`/visualizer/${projectId}`), 800);
         } catch {
             addToast("An unexpected error occurred.", "error");
@@ -63,51 +89,85 @@ export default function Home() {
     }, [isSignedIn]);
 
     return (
-        <div className="home">
+        <div className="home-dark">
             <Navbar />
             <Toast toasts={toasts} onDismiss={dismiss} />
 
             {/* ── Hero ── */}
-            <section className="hero">
-                <div className="announce">
-                    <div className="dot"><div className="pulse" /></div>
-                    <p>Now powered by Llama 3.2 11B (Hugging Face)</p>
+            <section className="hero-dark">
+                <div className="hero-dark__bg" />
+
+                <div className="hero-dark__inner">
+                    <div className="hero-dark__badge">
+                        <span className="hero-dark__badge-dot" />
+                        AI-Powered Real Estate Visualization
+                    </div>
+
+                    <h1 className="hero-dark__title">
+                        Turn 2D blueprints<br />
+                        <span className="hero-dark__title-accent">into living spaces</span>
+                    </h1>
+
+                    <p className="hero-dark__subtitle">
+                        Upload any floor plan and let our AI generate a fully furnished,
+                        interactive 3D architectural render with utility overlays and
+                        property analytics — free.
+                    </p>
+
+                    <div className="hero-dark__actions">
+                        <a href="#upload" className="hero-dark__cta">
+                            Start for Free <ArrowRight size={16} />
+                        </a>
+                        <a href="/dashboard" className="hero-dark__cta-ghost">
+                            View Projects
+                        </a>
+                    </div>
+
+                    {/* Stats strip */}
+                    <div className="hero-dark__stats">
+                        {STATS.map(({ value, label }) => (
+                            <div key={label} className="hero-dark__stat">
+                                <span className="hero-dark__stat-val">{value}</span>
+                                <span className="hero-dark__stat-label">{label}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
 
-                <h1>Turn 2D blueprints into<br /> photorealistic 3D renders</h1>
-
-                <p className="subtitle">
-                    Upload any floor plan and let our AI generate a fully furnished, top-down 3D architectural render — completely free.
-                </p>
-
-                <a href="#upload" className="cta">
-                    Start for Free <ArrowRight className="icon" />
-                </a>
-
-                {/* Upload shell */}
-                <div id="upload" className="upload-shell">
-                    <div className="grid-overlay" />
-                    <div className="upload-card">
-                        <div className="upload-head">
-                            <div className="upload-icon"><Layers3 className="icon" /></div>
-                            <h3>Upload your floor plan</h3>
-                            <p>PNG, JPG, WEBP — up to 10MB</p>
+                {/* Upload Card */}
+                <div id="upload" className="upload-dark">
+                    <div className="upload-dark__glow" />
+                    <div className="upload-dark__card">
+                        <div className="upload-dark__head">
+                            <div className="upload-dark__icon-wrap">
+                                <Layers3 size={24} className="text-orange-400" />
+                            </div>
+                            <h3 className="upload-dark__title">Upload your floor plan</h3>
+                            <p className="upload-dark__sub">PNG, JPG, WEBP — up to 10MB</p>
                         </div>
                         <Dropzone onUploadComplete={handleUploadComplete} onError={msg => addToast(msg, "error")} />
+                        <div className="upload-dark__tags">
+                            {["Electrical", "Gas", "Water", "3D Model", "Analytics"].map(t => (
+                                <span key={t} className="upload-dark__tag">{t}</span>
+                            ))}
+                        </div>
                     </div>
                 </div>
             </section>
 
             {/* ── Features ── */}
-            <section className="features">
-                <div className="section-inner">
-                    <h2 className="section-title">Why BetterView?</h2>
-                    <div className="features-grid">
-                        {FEATURES.map(({ icon: Icon, title, description }) => (
-                            <div key={title} className="feature-card">
-                                <div className="feature-icon"><Icon size={22} /></div>
-                                <h3>{title}</h3>
-                                <p>{description}</p>
+            <section className="features-dark">
+                <div className="features-dark__inner">
+                    <p className="features-dark__eyebrow">Everything you need</p>
+                    <h2 className="features-dark__title">Why BetterView?</h2>
+                    <div className="features-dark__grid">
+                        {FEATURES.map(({ icon: Icon, title, description, accent }) => (
+                            <div key={title} className="feature-dark-card">
+                                <div className="feature-dark-card__icon" style={{ background: `${accent}15`, color: accent }}>
+                                    <Icon size={22} />
+                                </div>
+                                <h3 className="feature-dark-card__title">{title}</h3>
+                                <p className="feature-dark-card__desc">{description}</p>
                             </div>
                         ))}
                     </div>
@@ -116,35 +176,46 @@ export default function Home() {
 
             {/* ── Recent Projects ── */}
             {projects.length > 0 && (
-                <section className="projects">
-                    <div className="section-inner">
-                        <div className="section-head">
-                            <div className="copy">
-                                <h2>{isSignedIn ? "Your Projects" : "Community Projects"}</h2>
-                                <p>{isSignedIn ? `Welcome back, ${userName}!` : "Sign in to see your past projects."}</p>
+                <section className="projects-dark">
+                    <div className="projects-dark__inner">
+                        <div className="projects-dark__head">
+                            <div>
+                                <p className="features-dark__eyebrow">Your work</p>
+                                <h2 className="features-dark__title" style={{ textAlign: "left" }}>
+                                    {isSignedIn ? "Recent Projects" : "Community Projects"}
+                                </h2>
+                                <p className="projects-dark__sub">
+                                    {isSignedIn ? `Welcome back, ${userName}!` : "Sign in to see your past projects."}
+                                </p>
                             </div>
                             {isSignedIn && (
-                                <a href="/dashboard" className="btn-ghost">View All →</a>
+                                <a href="/dashboard" className="hero-dark__cta-ghost">View All →</a>
                             )}
                         </div>
-                        <div className="projects-grid">
+                        <div className="projects-dark__grid">
                             {projects.slice(0, 6).map(({ id, name, renderedImage, renderedUrl, sourceImage, sourceUrl, timestamp }) => (
-                                <div key={id} className="project-card group" onClick={() => navigate(`/visualizer/${id}`)}>
-                                    <div className="preview">
+                                <div key={id} className="project-dark-card group" onClick={() => navigate(`/visualizer/${id}`)}>
+                                    <div className="project-dark-card__preview">
                                         <img src={renderedUrl || renderedImage || sourceUrl || sourceImage} alt={name} />
                                         {(renderedImage || renderedUrl) && (
-                                            <div className="badge"><span>3D Rendered</span></div>
+                                            <div className="project-dark-card__badge">
+                                                <Star size={9} /> 3D Ready
+                                            </div>
                                         )}
+                                        <div className="project-dark-card__hover-overlay">
+                                            <ArrowUpRight size={20} />
+                                        </div>
                                     </div>
-                                    <div className="card-body">
+                                    <div className="project-dark-card__body">
                                         <div>
                                             <h3>{name}</h3>
-                                            <div className="meta">
-                                                <Clock size={12} />
+                                            <div className="project-dark-card__meta">
+                                                <Clock size={11} />
                                                 <span>{new Date(timestamp).toLocaleDateString()}</span>
+                                                <MapPin size={11} className="ml-2" />
+                                                <span>Floor Plan</span>
                                             </div>
                                         </div>
-                                        <div className="arrow"><ArrowUpRight size={18} /></div>
                                     </div>
                                 </div>
                             ))}
@@ -152,6 +223,17 @@ export default function Home() {
                     </div>
                 </section>
             )}
+
+            {/* ── Footer CTA ── */}
+            <section className="footer-cta-dark">
+                <div className="footer-cta-dark__inner">
+                    <h2>Ready to visualize?</h2>
+                    <p>Join thousands of architects and real estate professionals.</p>
+                    <a href="#upload" className="hero-dark__cta">
+                        Upload Free <ArrowRight size={16} />
+                    </a>
+                </div>
+            </section>
         </div>
     );
 }

@@ -1,4 +1,4 @@
-import { Box, LayoutGrid } from "lucide-react";
+import { Box, LayoutGrid, Home } from "lucide-react";
 import Button from "./ui/Button";
 import { useOutletContext, useNavigate, NavLink } from "react-router";
 import type { AuthOutletContext } from "../type.d";
@@ -16,41 +16,43 @@ const Navbar = () => {
     };
 
     return (
-        <header className="navbar">
-            <nav className="inner">
-                <div className="left">
-                    <div className="brand" onClick={() => navigate("/")} style={{ cursor: "pointer" }}>
-                        <Box className="logo" />
-                        <span className="name">BetterView</span>
+        <header className="navbar-dark">
+            <nav className="navbar-dark__inner">
+                <div className="navbar-dark__left">
+                    <div className="navbar-dark__brand" onClick={() => navigate("/")} role="button">
+                        <div className="navbar-dark__logo">
+                            <Box size={18} />
+                        </div>
+                        <span className="navbar-dark__name">BetterView</span>
                     </div>
 
-                    <ul className="links">
-                        <a href="#upload">Upload</a>
+                    <ul className="navbar-dark__links">
+                        <a href="#upload" className="navbar-dark__link">Upload</a>
                         {isSignedIn && (
-                            <NavLink to="/dashboard" className="flex items-center gap-1">
-                                <LayoutGrid size={14} /> Dashboard
+                            <NavLink to="/dashboard" className="navbar-dark__link flex items-center gap-1">
+                                <LayoutGrid size={13} /> Dashboard
                             </NavLink>
                         )}
-                        <NavLink to="/pricing">Pricing</NavLink>
+                        <NavLink to="/pricing" className="navbar-dark__link">Pricing</NavLink>
                     </ul>
                 </div>
 
-                <div className="actions">
+                <div className="navbar-dark__actions">
                     {isSignedIn ? (
                         <>
-                            <span className="greeting">
+                            <span className="navbar-dark__greeting">
                                 {userName ? `Hi, ${userName}` : "Signed in"}
                             </span>
-                            <Button size="sm" onClick={handleAuthClick} className="btn">
+                            <button className="navbar-dark__btn-ghost" onClick={handleAuthClick}>
                                 Log Out
-                            </Button>
+                            </button>
                         </>
                     ) : (
                         <>
-                            <Button onClick={handleAuthClick} size="sm" variant="ghost">
+                            <button className="navbar-dark__btn-ghost" onClick={handleAuthClick}>
                                 Log In
-                            </Button>
-                            <a href="#upload" className="cta">Get Started</a>
+                            </button>
+                            <a href="#upload" className="navbar-dark__btn-primary">Get Started</a>
                         </>
                     )}
                 </div>
